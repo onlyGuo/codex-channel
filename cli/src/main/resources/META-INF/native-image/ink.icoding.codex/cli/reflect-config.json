@@ -1,4 +1,5 @@
 [
+  { "name": "picocli.CommandLine$AutoHelpMixin", "allDeclaredConstructors": true, "allDeclaredFields": true, "allDeclaredMethods": true },
   { "name": "ink.icoding.codex.cli.CodexChannelCli", "allDeclaredConstructors": true, "allDeclaredFields": true, "allDeclaredMethods": true },
   { "name": "ink.icoding.codex.cli.CliVersionProvider", "allDeclaredConstructors": true, "allDeclaredMethods": true },
   { "name": "ink.icoding.codex.cli.AuthCommand", "allDeclaredConstructors": true, "allDeclaredFields": true, "allDeclaredMethods": true },
