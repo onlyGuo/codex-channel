@@ -4,8 +4,8 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>ink.icoding.codex</groupId>
-        <artifactId>service</artifactId>
-        <version>0.0.1-SNAPSHOT</version>
+        <artifactId>codex-channel</artifactId>
+        <version>1.0.0</version><!-- version -->
     </parent>
 
     <artifactId>cli</artifactId>
