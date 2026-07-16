@@ -1,0 +1,167 @@
+name: Release native binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+            package: tar
+          - runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+            package: tar
+          - runner: macos-15-intel
+            platform: macos-x86_64
+            package: tar
+          - runner: macos-15
+            platform: macos-aarch64
+            package: tar
+          - runner: windows-latest
+            platform: windows-x86_64
+            package: zip
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          distribution: graalvm
+          version: "25.0"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+          native-image-job-reports: "true"
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag must use a semantic version such as v1.2.3 or v1.2.3-rc.1" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set Maven version
+        shell: bash
+        run: ./mvnw -q versions:set -DnewVersion="${{ steps.version.outputs.version }}" -DgenerateBackupPoms=false
+
+      - name: Build native executable
+        shell: bash
+        run: ./mvnw -pl cli -am -Pnative package -DskipTests
+
+      - name: Smoke test native executable
+        if: matrix.package == 'tar'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test "$(./cli/target/codex-channel --version)" = "codex-channel $VERSION"
+          ./cli/target/codex-channel --home "${RUNNER_TEMP}/codex-channel-smoke" --json account schedule
+
+      - name: Smoke test native executable on Windows
+        if: matrix.package == 'zip'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $reportedVersion = & ./cli/target/codex-channel.exe --version
+          if ($reportedVersion -ne "codex-channel $env:VERSION") {
+            throw "Expected codex-channel $env:VERSION, got $reportedVersion"
+          }
+          & ./cli/target/codex-channel.exe --home "$env:RUNNER_TEMP/codex-channel-smoke" --json account schedule
+
+      - name: Package Unix executable
+        if: matrix.package == 'tar'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          mkdir -p dist/package
+          install -m 755 cli/target/codex-channel dist/package/codex-channel
+          archive="codex-channel-v${VERSION}-${PLATFORM}.tar.gz"
+          tar -C dist/package -czf "dist/${archive}" codex-channel
+          cd dist
+          shasum -a 256 "$archive" > "${archive}.sha256"
+
+      - name: Package Windows executable
+        if: matrix.package == 'zip'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/package | Out-Null
+          Copy-Item cli/target/codex-channel.exe dist/package/codex-channel.exe
+          $archive = "codex-channel-v$env:VERSION-$env:PLATFORM.zip"
+          Compress-Archive -Path dist/package/codex-channel.exe -DestinationPath "dist/$archive"
+          $hash = (Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -Encoding ascii "dist/$archive.sha256"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download native packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Verify package checksums
+        shell: bash
+        run: |
+          cd release
+          for checksum in *.sha256; do
+            shasum -a 256 -c "$checksum"
+          done
+
+      - name: Create or update GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* --verify-tag --generate-notes --title "codex-channel $GITHUB_REF_NAME"
+          fi

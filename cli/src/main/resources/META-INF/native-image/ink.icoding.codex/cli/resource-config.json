@@ -1,0 +1,7 @@
+{
+  "resources": {
+    "includes": [
+      { "pattern": "\\Qink/icoding/codex/cli/version.properties\\E" }
+    ]
+  }
+}
