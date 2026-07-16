@@ -152,7 +152,7 @@ jobs:
         run: |
           cd release
           for checksum in *.sha256; do
-            shasum -a 256 -c "$checksum"
+            tr -d '\r' < "$checksum" | shasum -a 256 -c -
           done
 
       - name: Create or update GitHub release
